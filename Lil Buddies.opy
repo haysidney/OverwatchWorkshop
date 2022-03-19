@@ -50,6 +50,7 @@ settings {
         }
     },
     "workshop": {
+        "Bot Count": 1,
         "Pets": true
     }
 }
@@ -66,8 +67,10 @@ playervar _Wandering 1
 playervar _WanderDestination 2
 playervar _PlayerType 3
 playervar _ParentPlayer 4
-playervar _PlayerTargetingMe 5
+playervar _PlayersTargetingMe 5
+playervar _LastPlayerHit 6
 playervar _PetState 7
+playervar _OrbsOnMe 8
 
 
 #Subroutine names
@@ -86,7 +89,7 @@ rule "Init":
     
     AICount = createWorkshopSetting(int[0:2], "Bots", "Bot Count", 0, 0)
     getAllPlayers().disableGamemodeHud()
-    getAllPlayers().disableHeroHUD()
+    #getAllPlayers().disableHeroHUD()
     getAllPlayers().enableMessages()
     disableAnnouncer()
     disableGamemodeCompletion()
@@ -111,6 +114,8 @@ rule "Bots/Humans - Init":
     hudText(eventPlayer, "Info", "Debug", "Slot: {0}".format(eventPlayer.getSlot()), HudPosition.LEFT, 0, Color.WHITE, Color.WHITE, Color.WHITE, HudReeval.VISIBILITY_AND_STRING, SpecVisibility.DEFAULT)
     #Human/Pet Friendly Fire
     startDamageModification([player for player in getAllPlayers() if player._ParentPlayer == eventPlayer], eventPlayer, 0, DamageReeval.RECEIVERS_AND_DAMAGERS)
+    eventPlayer._PlayersTargetingMe = []
+    eventPlayer._OrbsOnMe = []
 
 
 rule "Humans - SpawnPet":
@@ -125,14 +130,26 @@ rule "Damage Orb Attacker":
     @Event eachPlayer
     @Condition eventPlayer.isHoldingButton(Button.ABILITY_1) == true
     
-    (raycast(eventPlayer.getEyePosition(), eventPlayer.getEyePosition() + eventPlayer.getFacingDirection() * 10000, getAllPlayers() if eventPlayer._ParentPlayer != eventPlayer else [], eventPlayer, false).getPlayerHit())._PlayerTargetingMe = eventPlayer
+    smallMessage(eventPlayer, "Discord Orb")
+    eventPlayer._LastPlayerHit = raycast(eventPlayer.getEyePosition(), eventPlayer.getEyePosition() + eventPlayer.getFacingDirection() * 100, [player for player in getAllPlayers() if player._ParentPlayer != eventPlayer], eventPlayer, false).getPlayerHit()
+    if eventPlayer._LastPlayerHit == null:
+        ([player for player in getAllPlayers() if eventPlayer in player._PlayersTargetingMe])._PlayersTargetingMe.remove(eventPlayer)
+    else:
+        if not eventPlayer in eventPlayer._LastPlayerHit._PlayersTargetingMe:
+            eventPlayer._LastPlayerHit._PlayersTargetingMe.append(eventPlayer)
 
 
 rule "Damage Orb Victim":
     @Event eachPlayer
-    @Condition eventPlayer._PlayerTargetingMe != null
     
-    createEffect(getAllPlayers(), Effect.ORB, Color.PURPLE, eventPlayer, 1, EffectReeval.VISIBILITY_POSITION_AND_RADIUS)
+    if len(eventPlayer._PlayersTargetingMe) > 0 and len(eventPlayer._OrbsOnMe) == 0:
+        createEffect(getAllPlayers(), Effect.ORB, Color.PURPLE, eventPlayer, 1, EffectReeval.VISIBILITY_POSITION_AND_RADIUS)
+        eventPlayer._OrbsOnMe.append(getLastCreatedEntity())
+    elif len(eventPlayer._PlayersTargetingMe) == 0 and len(eventPlayer._OrbsOnMe) > 0:
+        destroyEffect(eventPlayer._OrbsOnMe)
+        eventPlayer._OrbsOnMe = []
+    wait(0.25)
+    goto RULE_START
 
 
 rule "Bots - Init":
@@ -178,12 +195,14 @@ rule "Pets - Follow":
     @Condition eventPlayer._PlayerType == "Pet"
     @Condition eventPlayer._PetState == "Follow"
     
+    #if not RULE_CONDITION:
+    #        return
     eventPlayer.setFacing(directionTowards(eventPlayer.getPosition(), eventPlayer._ParentPlayer.getPosition()), Relativity.TO_WORLD)
     if distance(eventPlayer.getPosition(), eventPlayer._ParentPlayer) <= 4:
         eventPlayer.stopThrottleInDirection()
     else:
         eventPlayer.startThrottleInDirection(eventPlayer.getFacingDirection(), 0.9, Relativity.TO_WORLD, Throttle.REPLACE_EXISTING, ThrottleReeval.DIRECTION_AND_MAGNITUDE)
-    wait(0.1)
+    wait(0.1, Wait.ABORT_WHEN_FALSE)
     goto RULE_START
 
 
@@ -192,12 +211,14 @@ rule "Pets - Attack":
     @Condition eventPlayer._PlayerType == "Pet"
     @Condition eventPlayer._PetState == "Attack"
     
-    eventPlayer.setFacing(directionTowards(eventPlayer.getPosition(), (([player for player in getAllPlayers() if player._PlayerTargetingMe == eventPlayer._ParentPlayer])[0]).getPosition()), Relativity.TO_WORLD)
-    if distance(eventPlayer.getPosition(), (([player for player in getAllPlayers() if player._PlayerTargetingMe == eventPlayer._ParentPlayer])[0]).getPosition()) <= 4:
+    #if not RULE_CONDITION:
+    #        return
+    eventPlayer.setFacing(directionTowards(eventPlayer.getPosition(), (([player for player in getAllPlayers() if eventPlayer._ParentPlayer in player._PlayersTargetingMe])[0]).getPosition()), Relativity.TO_WORLD)
+    if distance(eventPlayer.getPosition(), (([player for player in getAllPlayers() if eventPlayer._ParentPlayer in player._PlayersTargetingMe])[0]).getPosition()) <= 4:
         eventPlayer.stopThrottleInDirection()
     else:
         eventPlayer.startThrottleInDirection(eventPlayer.getFacingDirection(), 0.9, Relativity.TO_WORLD, Throttle.REPLACE_EXISTING, ThrottleReeval.DIRECTION_AND_MAGNITUDE)
-    wait(0.1)
+    wait(0.1, Wait.ABORT_WHEN_FALSE)
     goto RULE_START
 
 
@@ -206,10 +227,14 @@ rule "Pets - Status":
     @Condition eventPlayer._PlayerType == "Pet"
     
     #Check if we're targetting someone
-    if [player for player in getAllPlayers() if player._PlayerTargetingMe == eventPlayer._ParentPlayer]:
-        eventPlayer._PetState = "Attack"
+    if len([player for player in getAllPlayers() if eventPlayer._ParentPlayer in player._PlayersTargetingMe]) > 0:
+        if eventPlayer._PetState != "Attack":
+            #eventPlayer.stopThrottleInDirection()
+            eventPlayer._PetState = "Attack"
     else:
-        eventPlayer._PetState = "Follow"
+        if eventPlayer._PetState != "Follow":
+            #eventPlayer.stopThrottleInDirection()
+            eventPlayer._PetState = "Follow"
     wait(0.1)
     goto RULE_START
 
